@@ -84,6 +84,11 @@ test("the workflow builds both architectures on native runners, on a tag", () =>
   assert.match(workflow, /debian:bookworm/)
 })
 
+// Generic leak classes: links to agent sessions, local working-memory files,
+// private repositories, and any GitHub repository of this organisation other
+// than this one. The maintainers also run a fuller local check before pushing.
+const LEAK = /claude\.ai|session_[0-9A-Za-z]{6,}|Claude-Session|\.remember\b|-internal\b|github\.com\/nodaroai\/(?!ffmpeg-static\b)[\w.-]+/i
+
 // --- review round: reproducibility, an approved component set, hardening ---------
 
 test("the patch describes itself as it is: it differs from upstream only by skipping closed inputs", () => {
@@ -91,7 +96,7 @@ test("the patch describes itself as it is: it differs from upstream only by skip
   assert.match(patch, /differs from upstream only by skipping\s+closed inputs/)
   // the previous form took the lowest-numbered open input when all were closed; that is gone
   assert.doesNotMatch(patch, /lowest-numbered/)
-  assert.doesNotMatch(patch, /Speaker|nodaro-ci|backend\//i, "nothing internal in a public patch header")
+  assert.doesNotMatch(patch, LEAK, "nothing internal in a public patch header")
 })
 
 test("the build is reproducible from its record: base image by digest, apt from a dated snapshot, pip pinned", () => {
@@ -213,7 +218,7 @@ test("a release needs two byte-identical builds per architecture and holds the c
 test("nothing internal is in the public tree", () => {
   for (const rel of ["build.sh", "compare-stock.sh", "check-source-offer.sh", "README.md", "DROPPED.md", "LICENSE.md", ".github/workflows/release.yml", ".github/workflows/test.yml"]) {
     const text = read(rel)
-    assert.doesNotMatch(text, /internal|plan\.nodaro|railway|superpowers|speaker.?view|install-pinned|nodaro-ci|epyc|\.remember|session_|backend\/|packages\//i, rel)
+    assert.doesNotMatch(text, LEAK, rel)
   }
 })
 
