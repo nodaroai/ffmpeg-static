@@ -56,7 +56,8 @@ while IFS=$'\t' read -r kind name ref lic; do
     *) fail "unknown trace kind '$kind'" ;;
   esac
   # at least one licence file (not a directory entry) under LICENSES/<dir>/
-  grep -E "^$BTOP/LICENSES/$lic/.*[^/]$" "$TMP/bin.list" >/dev/null || fail "$name: no licence text under LICENSES/$lic/ in the binary tarball"
+  # (a fixed-string prefix match: names such as libstdc++-12-dev are not regular expressions)
+  awk -v p="$BTOP/LICENSES/$lic/" 'index($0, p) == 1 && substr($0, length($0)) != "/" {f = 1} END {exit !f}' "$TMP/bin.list" || fail "$name: no licence text under LICENSES/$lic/ in the binary tarball"
 done < "$TMP/trace"
 
 [ "$n" -gt 0 ] || fail "the link trace is empty: nothing proves what was linked"

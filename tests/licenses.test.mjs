@@ -108,9 +108,9 @@ const goodTrace = [
   ["built", "ffmpeg", "ffmpeg-abc.tar", "ffmpeg"],
   ["built", "x264", "x264-def.tar", "x264"],
   ["debian", "zlib", "1.2.13.dfsg-1", "debian/zlib"],
-  ["runtime", "gcc-12", "libgcc-12-dev", "gcc-runtime/libgcc-12-dev"],
+  ["runtime", "libstdc++-12-dev", "libstdc++-12-dev", "gcc-runtime/libstdc++-12-dev"],
 ].map(r => r.join("\t")).join("\n") + "\n"
-const goodLicenses = ["ffmpeg/COPYING.GPLv3", "x264/COPYING", "debian/zlib/copyright", "gcc-runtime/libgcc-12-dev/copyright"]
+const goodLicenses = ["ffmpeg/COPYING.GPLv3", "x264/COPYING", "debian/zlib/copyright", "gcc-runtime/libstdc++-12-dev/copyright"]
 const goodSrc = ["ffmpeg-abc.tar", "x264-def.tar", "debian/zlib_1.2.13.dfsg.orig.tar.xz", "debian/zlib_1.2.13.dfsg-1.debian.tar.xz"]
 const good = () => ({ trace: goodTrace, licenses: goodLicenses, srcFiles: goodSrc, dsc: { "zlib_1.2.13.dfsg-1.dsc": dscText } })
 const run = f => spawnSync("bash", [checker, f.bin, f.src], { encoding: "utf8" })
