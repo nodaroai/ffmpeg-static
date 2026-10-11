@@ -39,18 +39,23 @@ stack protector.
 
 ## Rebuild it
 
-The build is reproducible: the base image is pinned by digest, Debian packages come from a dated
+The build is meant to be reproducible: the base image is pinned by digest, Debian packages come from a dated
 `snapshot.debian.org` archive, every other library by commit, and the archives are packed deterministically.
 
 ```sh
 IMAGE=debian:bookworm@sha256:2c037a04925515fdd6ea85ea14a682d0e79931f5e9f5d07b6dbfc6ba12f9e858
 mkdir -p out
 docker run --rm -e BASE_IMAGE="$IMAGE" -v "$PWD":/src:ro -v "$PWD/out":/out "$IMAGE" bash /src/build.sh
-sha256sum out/*.tar.xz        # equals the release's SHA256SUMS for your architecture
+sha256sum out/*.tar.xz
 ```
 
-The release workflow (`.github/workflows/release.yml`) builds every architecture twice on GitHub-hosted
-runners and refuses to publish unless the two builds are byte-identical.
+What has been compared: the release workflow (`.github/workflows/release.yml`) builds every architecture twice
+on GitHub-hosted runners (`ubuntu-24.04`, `ubuntu-24.04-arm`) and refuses to publish unless the two builds are
+byte-identical. That is the only comparison made. A local rebuild on another host (a different CPU count, since
+the build runs `make -j"$(nproc)"`, or a different Docker setup) has not yet been compared with a release, so do
+not expect its sha256 to equal the release's `SHA256SUMS` until that has been checked. Pass `BASE_IMAGE` exactly
+as above: `SOURCE.txt` records it, and it reads `unrecorded` (a different file, a different tarball) when omitted.
+The source archives (`*-source-*.tar.xz`) are covered by the same two-build comparison.
 
 ## Cutting a release
 
@@ -61,9 +66,36 @@ Change the pins in `build.sh` (and `EXTRA_VERSION` / the `-nodaro<N>` suffix), u
 
 ## Verification
 
-The measurements behind the patch are in the release notes of each release. The unpatched ffmpeg stalls on
-the many-input graph described above at a rate that depends on timing and CPU quota; the patched build was
-run against the unpatched one on the same inputs on a 2-vCPU host.
+The unpatched ffmpeg stalls on the many-input graph described above at a rate that depends on timing and CPU
+quota. The numbers below are the measurement behind the patch.
+
+Setup: a 6-input graph that tiles six seeked files into one picture, launched
+round-robin with the unpatched build and the patched build on the same synthetic sources, on a self-hosted
+runner with a 2-vCPU quota, two jobs at a time, on one CPU model. A launch counts as stalled when it makes no
+progress for 25 seconds.
+
+| build | launches | stalled | failed |
+|---|---|---|---|
+| unpatched (stock static build of the same commit) | 397 | 43 of 397 (10.8%) | 0 |
+| patched | 394 | 0 of 394 | 0 |
+
+Output parity: both builds use the same x264 (core 165, same options string). In 2 of the 3 jobs every finished
+launch of both builds had one and the same file md5 (and decoded-picture md5); in 15 of 15 follow-up jobs (6
+renders per build each, same sources) the file md5 and every frame CRC matched. One job did not match: its
+unpatched and patched outputs were each stable across about 130 launches but differed from each other; it was
+not reproduced in the 15 follow-up jobs on the same kind of hosts and the cause is not known. The unpatched build
+exited 255 once in each of 3 follow-up jobs (output complete and identical); the patched build never exited
+non-zero.
+
+Limits, stated plainly:
+
+- These numbers were taken with an earlier form of the fix. That form skipped closed inputs and, when every
+  open input was closed, took the lowest-numbered one. The patch in this repository keeps upstream's own pick
+  (the input with the most failed buffersrc requests) among the inputs that are not closed. The stall
+  and parity measurement has not yet been repeated with this form of the patch.
+- The binaries measured were an earlier build; the current ones differ from them (hardening flags, a pinned
+  Debian snapshot). The measurement has not yet been repeated on them.
+- arm64 was built and smoke-tested, not run on the stall venue (x86_64 only).
 
 ## Licence
 

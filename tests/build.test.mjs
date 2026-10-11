@@ -216,3 +216,38 @@ test("nothing internal is in the public tree", () => {
     assert.doesNotMatch(text, /internal|plan\.nodaro|railway|superpowers|speaker.?view|install-pinned|nodaro-ci|epyc|\.remember|session_|backend\/|packages\//i, rel)
   }
 })
+
+const readme = read("README.md")
+const patchText = () => readFileSync(new URL(patchFiles[0], patchDir), "utf8")
+
+test("the patch header places close_input() and eof_in in the filter thread, not on a scheduler side", () => {
+  const header = patchText().slice(0, patchText().indexOf("diff --git"))
+  assert.doesNotMatch(header, /scheduler side/)
+  assert.match(header, /filter thread/)
+  assert.match(header, /eof_in/)
+  assert.match(header, /ifp->eof/)
+})
+
+test("the patch header dates the ffmpeg master commit it cites by that commit, and names the master it re-checked", () => {
+  const header = patchText().slice(0, patchText().indexOf("diff --git"))
+  assert.doesNotMatch(header, /b5902e69c7, 2026-10-11/)
+  assert.match(header, /b5902e69c7 \(committed 2026-10-06\)/)
+  assert.match(header, /793f6013e7 \(2026-10-11\)/)
+})
+
+test("the measurements the patch header points at are in the README, with their limits", () => {
+  const header = patchText().slice(0, patchText().indexOf("diff --git"))
+  assert.match(header, /README\.md \(Verification\)/)
+  const verification = readme.slice(readme.indexOf("## Verification"), readme.indexOf("## Licence"))
+  assert.doesNotMatch(verification, /release notes/i, "the README must not point at release notes that carry no numbers")
+  assert.match(verification, /43 of 397/)
+  assert.match(verification, /0 of 394/)
+  assert.match(verification, /earlier form/i, "numbers were taken on the earlier form of the fix")
+  assert.match(verification, /has not yet been repeated/i)
+})
+
+test("the README claims reproducibility only where it was compared", () => {
+  assert.doesNotMatch(readme, /equals the release's SHA256SUMS/)
+  assert.match(readme, /has not yet been compared/i)
+  assert.match(readme, /BASE_IMAGE/)
+})

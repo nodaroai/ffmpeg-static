@@ -3,10 +3,12 @@ Subject: [PATCH] fftools/ffmpeg_filter: do not elect an input the graph has alre
 
 What:
   choose_input() picks the filtergraph input to request the next frame from.
-  It skips an input only when fgt->eof_in[i] is set, but that flag is set by
-  the filter thread when the EOF reaches it. close_input() marks the input
-  closed (ifp->eof) earlier, on the scheduler side. In between, choose_input()
-  can still elect the closed input. This patch skips inputs with ifp->eof set.
+  It skips an input only when fgt->eof_in[i] is set, which happens once the
+  EOF for that input has been delivered to the filter. close_input() (also
+  run in the filter thread) sets ifp->eof when the buffersrc status says the
+  graph wants no more data from that input, which can be before the EOF is
+  delivered. In between, choose_input() can still elect the closed input.
+  This patch skips inputs with ifp->eof set.
   It changes nothing else: upstream's pick (among the inputs still open in the
   filter thread, the one with the most failed buffersrc requests) is made
   among the inputs that are not closed, and when every input is closed it is
@@ -19,12 +21,13 @@ Why:
   never send another frame, so ffmpeg stops making progress and never exits.
   It needs a filtergraph with many inputs where one input's last reference
   ends before the others (a 6-input graph that tiles six seeked files into one
-  picture). The measurements are in the README of the repository that carries
-  this patch (Verification).
+  picture). The measurements, with their limits, are in README.md (Verification) of
+  the repository that carries this patch.
 
 Upstream:
   Not reported to FFmpeg yet.
-  choose_input() is unchanged in FFmpeg master (b5902e69c7, 2026-10-11).
+  choose_input() is unchanged in FFmpeg master: checked at b5902e69c7 (committed 2026-10-06)
+  and again at 793f6013e7 (2026-10-11).
   Drop this patch when a release carrying an equivalent fix is pinned.
 ---
 diff --git a/fftools/ffmpeg_filter.c b/fftools/ffmpeg_filter.c
