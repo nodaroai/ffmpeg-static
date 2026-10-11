@@ -1,0 +1,71 @@
+From: Tal Asa <10135422+talasa@users.noreply.github.com>
+Subject: [PATCH] fftools/ffmpeg_filter: do not elect an input the graph has already closed
+
+What:
+  choose_input() picks the filtergraph input to request the next frame from.
+  It skips an input only when fgt->eof_in[i] is set, but that flag is set by
+  the filter thread when the EOF reaches it. close_input() marks the input
+  closed (ifp->eof) earlier, on the scheduler side. In between, choose_input()
+  can still elect the closed input. This patch skips inputs with ifp->eof set.
+  It changes nothing else: upstream's pick (among the inputs still open in the
+  filter thread, the one with the most failed buffersrc requests) is made
+  among the inputs that are not closed, and when every input is closed it is
+  made among all of them exactly as before, so the av_assert0() keeps its
+  place and its conditions. The patch differs from upstream only by skipping
+  closed inputs.
+
+Why:
+  Electing a closed input makes the filter thread wait on a decoder that will
+  never send another frame, so ffmpeg stops making progress and never exits.
+  It needs a filtergraph with many inputs where one input's last reference
+  ends before the others (a 6-input graph that tiles six seeked files into one
+  picture). The measurements are in the README of the repository that carries
+  this patch (Verification).
+
+Upstream:
+  Not reported to FFmpeg yet.
+  choose_input() is unchanged in FFmpeg master (b5902e69c7, 2026-10-11).
+  Drop this patch when a release carrying an equivalent fix is pinned.
+---
+diff --git a/fftools/ffmpeg_filter.c b/fftools/ffmpeg_filter.c
+index 765b65d0ec..7b0bcf8967 100644
+--- a/fftools/ffmpeg_filter.c
++++ b/fftools/ffmpeg_filter.c
+@@ -2353,7 +2353,9 @@ static void send_command(FilterGraph *fg, AVFilterGraph *graph,
+ static int choose_input(const FilterGraph *fg, const FilterGraphThread *fgt)
+ {
+     int nb_requests, nb_requests_max = -1;
++    int nb_requests_max_open = -1;
+     int best_input = -1;
++    int best_input_open = -1;
+ 
+     for (int i = 0; i < fg->nb_inputs; i++) {
+         InputFilter *ifilter = fg->inputs[i];
+@@ -2366,11 +2368,26 @@ static int choose_input(const FilterGraph *fg, const FilterGraphThread *fgt)
+             nb_requests_max = nb_requests;
+             best_input = i;
+         }
++
++        // The graph has already closed this input (close_input() set
++        // ifp->eof, but fgt->eof_in is only set once the EOF reaches the
++        // filter thread). Electing it makes the filter thread wait on a
++        // decoder that will never send another frame, so prefer an input
++        // that is still open.
++        if (ifp_from_ifilter(ifilter)->eof)
++            continue;
++
++        if (nb_requests > nb_requests_max_open) {
++            nb_requests_max_open = nb_requests;
++            best_input_open = i;
++        }
+     }
+ 
+     av_assert0(best_input >= 0);
+ 
+-    return best_input;
++    // Every input still open in the filter thread is already closed: the
++    // original pick (the most failed requests) stands.
++    return best_input_open >= 0 ? best_input_open : best_input;
+ }
+ 
+ static int choose_out_timebase(OutputFilterPriv *ofp, AVFrame *frame)

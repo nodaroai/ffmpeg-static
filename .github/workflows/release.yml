@@ -1,0 +1,176 @@
+name: Release
+
+# On a tag: build ffmpeg for x86_64 (ubuntu-24.04) and arm64 (ubuntu-24.04-arm)
+# TWICE each, check that the two builds are byte-identical, and publish a GitHub
+# release holding the tarballs, their .sha256 files and the complete
+# corresponding-source archives (the GPL source offer). By hand
+# (workflow_dispatch) it builds and checks but publishes nothing.
+#
+# The tag must be <describe>-<extra version> as build.sh pins it
+# (e.g. n8.1.2-21-gce3c09c101-20260630-nodaro1), optionally with a leading "v".
+#
+# Guarded by tests/build.test.mjs.
+on:
+  push:
+    tags: ["*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # The build's base image, by digest (the multi-arch index of Debian bookworm as
+  # of 2026-10-11, created 2026-10-05): a moving tag would change every system
+  # library under the build. Debian packages come from a dated snapshot archive
+  # (APT_SNAPSHOT in build.sh), so the pair pins the userland.
+  BASE_IMAGE: debian:bookworm@sha256:2c037a04925515fdd6ea85ea14a682d0e79931f5e9f5d07b6dbfc6ba12f9e858
+  # The prebuilt static build of the same ffmpeg commit this one follows: the
+  # baseline of the component comparison (DROPPED.md).
+  STOCK_URL_AMD64: https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-06-30-13-34/ffmpeg-n8.1.2-21-gce3c09c101-linux64-gpl-8.1.tar.xz
+  STOCK_SHA256_AMD64: 0ba73bbd93472c7622f6dec26d334c5e62e64d858d072490b2844320970456cd
+  STOCK_URL_ARM64: https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-06-30-13-34/ffmpeg-n8.1.2-21-gce3c09c101-linuxarm64-gpl-8.1.tar.xz
+  STOCK_SHA256_ARM64: d3f90a71a38238466de2e4dc98537862d244e3307383435f94cbc4b8491033f8
+
+jobs:
+  tag:
+    name: Check the tag
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: The tag names the version build.sh produces
+        run: |
+          set -euo pipefail
+          want="$(sed -n 's/^FFMPEG_DESCRIBE="\(.*\)"/\1/p' build.sh)-$(sed -n 's/^EXTRA_VERSION="\(.*\)"/\1/p' build.sh)"
+          echo "build.sh builds $want"
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            [ "$tag" = "$want" ] || { echo "tag $GITHUB_REF_NAME does not match $want" >&2; exit 1; }
+          fi
+
+  build:
+    name: Build ${{ matrix.arch }} (run ${{ matrix.run }})
+    needs: tag
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+        run: [1, 2]
+        include:
+          - { arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Build in Debian bookworm
+        run: |
+          mkdir -p out
+          docker run --rm -e BASE_IMAGE="$BASE_IMAGE" -v "$PWD":/src:ro -v "$PWD/out":/out "$BASE_IMAGE" bash /src/build.sh
+
+      - name: Compare with the prebuilt (what was dropped, what was added)
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.arch }}" = amd64 ]; then URL="$STOCK_URL_AMD64"; SHA="$STOCK_SHA256_AMD64"; TARGET=linux64
+          else URL="$STOCK_URL_ARM64"; SHA="$STOCK_SHA256_ARM64"; TARGET=linuxarm64; fi
+          mkdir -p stock && curl -fsSL "$URL" -o stock.tar.xz
+          echo "$SHA  stock.tar.xz" | sha256sum -c -
+          tar -xf stock.tar.xz -C stock --strip-components=1
+          NEWTAR="$(ls out/ffmpeg-*-gpl-8.1-nodaro*.tar.xz)"; mkdir -p new && tar -xf "$NEWTAR" -C new --strip-components=1
+          bash compare-stock.sh stock/bin/ffmpeg new/bin/ffmpeg out/compare | tee -a "$GITHUB_STEP_SUMMARY"
+          # What the prebuilt had and this one lacks is an approved, written-down
+          # list (DROPPED.md explains it). A change in either direction fails here;
+          # review it, then update the list and DROPPED.md together.
+          diff -u "stock-only.$TARGET.txt" out/compare/stock-only.txt
+
+      - name: Run it from the tarball on a plain Debian image with nothing installed but fonts
+        run: |
+          NEWTAR="$(ls out/ffmpeg-*-gpl-8.1-nodaro*.tar.xz)"; SHA="$(cut -d' ' -f1 "$NEWTAR.sha256")"
+          docker run --rm -v "$PWD/out":/out:ro node:22-slim bash -c "
+            set -euo pipefail
+            apt-get update -qq && apt-get install -y -qq --no-install-recommends xz-utils fontconfig fonts-dejavu-core >/dev/null
+            echo '$SHA  /out/$(basename "$NEWTAR")' | sha256sum -c -
+            mkdir /dist && tar -xf /out/$(basename "$NEWTAR") -C /dist --strip-components=1
+            install -m 0755 /dist/bin/ffmpeg /dist/bin/ffprobe /usr/local/bin/
+            ffmpeg -version | head -1
+            ffmpeg -version | head -1 | grep -q -- '-nodaro'
+            ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x240:rate=25:duration=1 \
+              -vf \"drawtext=text=ok:fontsize=24:fontcolor=white:x=10:y=10\" -c:v libx264 -f null -
+            ffprobe -version | head -1"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: build-${{ matrix.arch }}-${{ matrix.run }}
+          path: |
+            out/*.tar.xz
+            out/*.sha256
+            out/buildconf.txt
+            out/compare/DROPPED.md
+          retention-days: 30
+          if-no-files-found: error
+
+  reproducible:
+    name: The two builds are byte-identical
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: art
+      - name: Compare run 1 and run 2, per architecture
+        run: |
+          set -euo pipefail
+          ls -R art | head -40
+          for arch in amd64 arm64; do
+            ( cd "art/build-$arch-1" && sha256sum *.tar.xz ) > "$arch-1.sums"
+            ( cd "art/build-$arch-2" && sha256sum *.tar.xz ) > "$arch-2.sums"
+            echo "== $arch"; cat "$arch-1.sums"
+            diff -u "$arch-1.sums" "$arch-2.sums" || { echo "$arch: the two builds differ" >&2; exit 1; }
+          done
+
+  release:
+    name: Publish the release
+    if: github.ref_type == 'tag'
+    needs: reproducible
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: build-*-1
+          path: art
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir assets
+          cp art/build-*-1/*.tar.xz art/build-*-1/*.sha256 assets/
+          cp art/build-amd64-1/buildconf.txt assets/buildconf.linux64.txt
+          cp art/build-arm64-1/buildconf.txt assets/buildconf.linuxarm64.txt
+          ( cd assets && sha256sum *.tar.xz > SHA256SUMS && cat SHA256SUMS )
+          cat > notes.md <<NOTES
+          Static ffmpeg (GPL) for linux x86_64 and arm64: upstream commit ce3c09c101 (n8.1.2-21) plus one scheduler fix, see the README.
+
+          Anonymous download, then verify:
+
+          \`\`\`
+          curl -fsSL -O https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/<file>
+          sha256sum -c SHA256SUMS
+          \`\`\`
+
+          The \`*-source-*.tar.xz\` assets are the complete corresponding source (the GPL source offer): ffmpeg at the commit, the patch, every library built from source and the Debian source packages of the statically linked Debian libraries. Two independent builds of this tag produced byte-identical tarballs on both architectures before this release was created.
+
+          \`\`\`
+          $(cat assets/SHA256SUMS)
+          \`\`\`
+          NOTES
+          gh release create "$GITHUB_REF_NAME" assets/* --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
