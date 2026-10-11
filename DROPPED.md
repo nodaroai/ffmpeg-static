@@ -16,7 +16,7 @@ Why things are gone:
 
 None of them is needed for the file-based transcoding this build is meant for.
 `libdav1d`, `libharfbuzz` and the five pinned libraries are built from source at the prebuilt's commits
-(see `build.sh`), so AV1 decoding and `drawtext` shaping are the same code as before.
+(see `build.sh`), so AV1 decoding and `drawtext` shaping are built from the same source revisions as before (whether the output is identical is what the README's Verification section reports).
 
 ## linux64 (x86_64)
 

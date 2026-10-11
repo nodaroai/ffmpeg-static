@@ -11,10 +11,13 @@
 # Output in /out:
 #   ffmpeg-<describe>-<linux64|linuxarm64>-gpl-8.1-nodaro<N>.tar.xz (+ .sha256)
 #       <top>/bin/ffmpeg, <top>/bin/ffprobe, LICENSE.txt, SOURCE.txt, packages.txt,
-#       buildconf.txt, source/ (the patches and this script)
+#       buildconf.txt, source/ (the patches and this script), LINK-TRACE.txt (every
+#       library linked into ffmpeg or ffprobe) and LICENSES/ (the licence text of each)
 #   ffmpeg-<describe>-nodaro<N>-source-<linux64|linuxarm64>.tar.xz (+ .sha256)
 #       the corresponding source: ffmpeg at the commit, every library built from
-#       source, and the Debian source packages of every library linked in statically
+#       source, and the Debian source packages of every library linked in statically.
+#       check-source-offer.sh (run at the end of this script and by the release
+#       workflow) proves the archive holds all of it.
 #
 # WHY IT EXISTS: ffmpeg's filter scheduler can elect a filtergraph input the
 # graph has already closed and then wait on it forever (patches/0001). The fix
@@ -29,8 +32,9 @@
 #     7a83528ea3431e9eca982a712bc3a7cd0789d5d0, the last commit before the
 #     2026-06-30 snapshot), with the same configure options and the same
 #     hardening flags (FORTIFY_SOURCE=2, stack protector, stack clash
-#     protection, RELRO + BIND_NOW), so the encoders and drawtext produce the
-#     same output;
+#     protection, RELRO + BIND_NOW). The goal is that the encoders and drawtext
+#     produce the same output as the prebuilt; what has been measured so far, and
+#     what has not, is in README.md (Verification);
 #   - the version line is that build's plus a -nodaro<N> suffix.
 # What is different: every other library comes from Debian bookworm, linked
 # statically. A library Debian cannot supply statically is dropped, but only
@@ -45,7 +49,8 @@
 # deterministically (sorted, fixed mtime/owner, single-threaded xz). SOURCE.txt
 # and packages.txt in the tarball record all of it.
 #
-# Gates, all fatal: the described version equals the pin, the required and the
+# Gates, all fatal: the described version equals the pin, every linked library has
+# its licence text and its source in the offer (check-source-offer.sh), the required and the
 # approved optional components exist, nothing but libc/libm/ld.so is
 # dynamically linked, the binaries are PIE + RELRO + BIND_NOW + stack-protected,
 # and a real encode of every required encoder runs.
@@ -156,6 +161,18 @@ fetch_commit() { # <url> <sha> <dir>
   git -C "$3" archive --format=tar --prefix="$3-$2/" "$2" > "$SRCPKG/$3-$2.tar"
 }
 
+# Which self-built library installed which static archive: the archives in
+# $PREFIX/lib after each library's install, minus those seen before. The link
+# trace maps an archive back to the source tarball it came from through this
+# record (derived, not a name table).
+: > "$WORK/prefix-seen.txt"; : > "$WORK/prefix-owners.txt"
+record_owner() { # <source tarball name in $SRCPKG>
+  local now
+  now="$( (cd "$PREFIX/lib" 2>/dev/null && ls -- *.a 2>/dev/null) | LC_ALL=C sort || true )"
+  LC_ALL=C comm -13 "$WORK/prefix-seen.txt" <(printf '%s\n' "$now" | sed '/^$/d') | sed "s|\$| $1|" >> "$WORK/prefix-owners.txt"
+  printf '%s\n' "$now" | sed '/^$/d' > "$WORK/prefix-seen.txt"
+}
+
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 # The prebuilt's base image sets these for every library it builds (BtbN's
 # FFmpeg-Builds images/base-linux64 at the same commit): -O2 -pipe -fPIC -DPIC plus FORTIFY,
@@ -170,6 +187,7 @@ fetch_commit https://code.videolan.org/videolan/x264.git "$X264_COMMIT" x264
 ( cd x264
   ./configure --prefix="$PREFIX" --disable-cli --enable-static --enable-pic --disable-lavf --disable-swscale
   make -j"$JOBS" && make install )
+record_owner "x264-$X264_COMMIT.tar"
 echo "::endgroup::"
 
 echo "::group::x265 (8 + 10 + 12 bit, as the prebuilt)"
@@ -213,6 +231,7 @@ Cflags: -I\${includedir}
 PC
   fi
   echo "Libs.private: -lstdc++ -lm -ldl -lpthread" >> "$PREFIX/lib/pkgconfig/x265.pc" )
+record_owner "x265-$X265_COMMIT.tar"
 echo "::endgroup::"
 
 echo "::group::lame r$LAME_SVN_REV"
@@ -229,6 +248,7 @@ tar -C . --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numer
     ./configure --prefix="$PREFIX" --disable-shared --enable-static --with-pic "${nasm_flag[@]}" \
       --disable-gtktest --disable-cpml --disable-frontend --disable-decoder
   make -j"$JOBS" && make install )
+record_owner "lame-r${LAME_SVN_REV}.tar"
 echo "::endgroup::"
 
 echo "::group::opus"
@@ -238,6 +258,7 @@ fetch_commit https://github.com/xiph/opus.git "$OPUS_COMMIT" opus
   autoreconf -isf
   ./configure --prefix="$PREFIX" --disable-shared --enable-static --with-pic --disable-extra-programs
   make -j"$JOBS" && make install )
+record_owner "opus-$OPUS_COMMIT.tar"
 echo "::endgroup::"
 
 echo "::group::freetype + harfbuzz (the prebuilt's order: freetype, harfbuzz on it, freetype with harfbuzz)"
@@ -246,6 +267,7 @@ fetch_commit https://gitlab.freedesktop.org/freetype/freetype.git "$FREETYPE_COM
   ./autogen.sh
   ./configure --prefix="$PREFIX" --disable-shared --enable-static --with-pic --without-harfbuzz
   make -j"$JOBS" && make install )
+record_owner "freetype-$FREETYPE_COMMIT.tar"
 fetch_commit https://github.com/harfbuzz/harfbuzz.git "$HARFBUZZ_COMMIT" harfbuzz
 ( cd harfbuzz
   mkdir build && cd build
@@ -254,6 +276,7 @@ fetch_commit https://github.com/harfbuzz/harfbuzz.git "$HARFBUZZ_COMMIT" harfbuz
     -Dtests=disabled -Dintrospection=disabled -Ddocs=disabled -Ddoc_tests=false -Dutilities=disabled ..
   ninja -j"$JOBS" && ninja install
   echo "Libs.private: -lpthread -lstdc++" >> "$PREFIX/lib/pkgconfig/harfbuzz.pc" )
+record_owner "harfbuzz-$HARFBUZZ_COMMIT.tar"
 ( cd freetype
   make distclean
   ./configure --prefix="$PREFIX" --disable-shared --enable-static --with-pic --with-harfbuzz=yes
@@ -267,6 +290,7 @@ fetch_commit https://code.videolan.org/videolan/dav1d.git "$DAV1D_COMMIT" dav1d
   mkdir build && cd build
   meson setup --prefix="$PREFIX" --libdir=lib --buildtype=release --default-library=static -Denable_tools=false -Denable_tests=false ..
   ninja -j"$JOBS" && ninja install )
+record_owner "dav1d-$DAV1D_COMMIT.tar"
 echo "::endgroup::"
 
 echo "::group::ffmpeg $FFMPEG_DESCRIBE + patches"
@@ -360,27 +384,104 @@ make -j"$JOBS"
 make install
 echo "::endgroup::"
 
-# Which Debian static archives ended up in the binaries: link ffmpeg once more
-# with a linker map (the shipped binaries are untouched), take every archive the
-# linker pulled a member from, map it to its Debian package, and download that
-# package's source. (The compiler runtime in /usr/lib/gcc and glibc, which stays
-# dynamic, are not part of the offer: they carry the GPL system-library exception.)
-echo "::group::which Debian libraries are linked in; their source"
-rm -f ffmpeg_g
-make LDEXEFLAGS="$(sed -n 's/^LDEXEFLAGS=//p' ffbuild/config.mak) -Wl,-Map=$WORK/ffmpeg.map" ffmpeg_g >/dev/null
-grep -oE '^/[^ ()]+\.a\(' "$WORK/ffmpeg.map" | tr -d '(' | LC_ALL=C sort -u > "$WORK/linked-archives.txt"
-: > "$WORK/linked-debian.txt"
+# What is linked into the binaries: link ffmpeg and ffprobe once more each with a
+# linker map (the shipped binaries are untouched) and take every static archive
+# the linker pulled a member from. That list IS the link trace; the licence texts
+# and the source offer are derived from it, never from a hand-kept list of names:
+#   - an archive a self-built library installed -> that library's pinned source
+#     tarball (prefix-owners.txt, recorded at install time) + its licence files;
+#   - a Debian archive -> its Debian source package (downloaded below) + the
+#     debian/copyright of that source package;
+#   - the compiler runtime (libgcc, libstdc++, linked with -static-libgcc /
+#     -static-libstdc++) -> licence text only (GPL runtime exception);
+#   - ffmpeg's own libav* archives -> the ffmpeg tarball.
+# An archive that cannot be placed, or a library with no licence text, fails the build.
+echo "::group::link trace, licences, and the source of the linked libraries"
+rm -f ffmpeg_g ffprobe_g
+LDX="$(sed -n 's/^LDEXEFLAGS=//p' ffbuild/config.mak)"
+: > "$WORK/linked-archives.txt"
+for t in ffmpeg ffprobe; do
+  make LDEXEFLAGS="$LDX -Wl,-Map=$WORK/$t.map" "${t}_g" >/dev/null
+  grep -oE '^/[^ ()]+\.a\(' "$WORK/$t.map" | tr -d '(' >> "$WORK/linked-archives.txt" || true
+done
+LC_ALL=C sort -u -o "$WORK/linked-archives.txt" "$WORK/linked-archives.txt"
+[ -s "$WORK/linked-archives.txt" ] || { echo "the link trace found no static archive: the trace is broken" >&2; exit 1; }
+
+LIC="$WORK/licenses"; rm -rf "$LIC"; mkdir -p "$LIC"
+: > "$WORK/linked-built.txt"; : > "$WORK/linked-debian.tsv"; : > "$WORK/linked-runtime.txt"
 while read -r a; do
   real="$(readlink -f "$a")"
-  case "$real" in "$PREFIX"/*|/usr/lib/gcc/*|"$WORK"/*) continue ;; esac
-  pkg="$(dpkg -S "$real" | head -1 | cut -d: -f1)"
-  [ -n "$pkg" ] || { echo "no Debian package owns $real" >&2; exit 1; }
-  dpkg-query -W -f='${source:Package}=${source:Version}\n' "$pkg" >> "$WORK/linked-debian.txt"
+  case "$real" in
+    "$WORK"/ffmpeg/*) continue ;;                      # ffmpeg's own libav*, libsw*
+    "$PREFIX"/*)
+      owner="$(awk -v b="$(basename "$real")" '$1 == b {print $2; exit}' "$WORK/prefix-owners.txt")"
+      [ -n "$owner" ] || { echo "no library owns $real" >&2; exit 1; }
+      echo "$owner" >> "$WORK/linked-built.txt" ;;
+    /usr/lib/gcc/*)
+      echo "$(dpkg -S "$real" | head -1 | cut -d: -f1)" >> "$WORK/linked-runtime.txt" ;;
+    "$WORK"/*) echo "unexpected archive $real in the link trace" >&2; exit 1 ;;
+    *)
+      pkg="$(dpkg -S "$real" | head -1 | cut -d: -f1)"
+      [ -n "$pkg" ] || { echo "no Debian package owns $real" >&2; exit 1; }
+      printf '%s\t%s\t%s\n' "$(dpkg-query -W -f='${source:Package}' "$pkg")" "$(dpkg-query -W -f='${source:Version}' "$pkg")" "$pkg" >> "$WORK/linked-debian.tsv" ;;
+  esac
 done < "$WORK/linked-archives.txt"
-LC_ALL=C sort -u -o "$WORK/linked-debian.txt" "$WORK/linked-debian.txt"
-[ -s "$WORK/linked-debian.txt" ] || { echo "the link trace found no Debian archive: the trace is broken" >&2; exit 1; }
+echo "ffmpeg-${FFMPEG_COMMIT}.tar" >> "$WORK/linked-built.txt"      # the program itself
+LC_ALL=C sort -u -o "$WORK/linked-built.txt" "$WORK/linked-built.txt"
+LC_ALL=C sort -u -o "$WORK/linked-debian.tsv" "$WORK/linked-debian.tsv"
+LC_ALL=C sort -u -o "$WORK/linked-runtime.txt" "$WORK/linked-runtime.txt"
+[ -s "$WORK/linked-debian.tsv" ] || { echo "the link trace found no Debian archive: the trace is broken" >&2; exit 1; }
+# (the source package names in the shipped manifest, one per line)
+cut -f1,2 "$WORK/linked-debian.tsv" | LC_ALL=C sort -u | tr '\t' '=' > "$WORK/linked-debian.txt"
 cat "$WORK/linked-debian.txt"
 ( cd "$SRCPKG/debian" && retry apt-get source --download-only -qq $(cat "$WORK/linked-debian.txt") )
+
+# Licence files out of a pinned source tarball (top-level or docs/ COPYING*, LICENSE*, ...).
+license_files_from_tar() { # <tarball> <dest dir>
+  local members
+  members="$(tar -tf "$1" | grep -iE '^[^/]+/(docs/)?(COPYING|LICENSE|LICENCE|COPYRIGHT|NOTICE|FTL|GPL|LGPL)[^/]*$' | grep -v '/$' || true)"
+  [ -n "$members" ] || return 1
+  mkdir -p "$2"
+  # shellcheck disable=SC2086
+  tar -xf "$1" -C "$2" --strip-components=1 $members
+}
+
+: > "$WORK/link-trace.txt"
+while read -r tarball; do
+  name="${tarball%-*}"                                  # x264-<sha>.tar -> x264, lame-r6531.tar -> lame
+  license_files_from_tar "$SRCPKG/$tarball" "$LIC/$name" || { echo "no licence text found for $name ($tarball)" >&2; exit 1; }
+  printf 'built\t%s\t%s\t%s\n' "$name" "$tarball" "$name" >> "$WORK/link-trace.txt"
+done < "$WORK/linked-built.txt"
+
+while IFS=$'\t' read -r src ver pkg; do
+  nover="${ver#*:}"                                     # the .dsc file name has no epoch
+  dest="$LIC/debian/$src"; mkdir -p "$dest"
+  dsc="$SRCPKG/debian/${src}_${nover}.dsc"
+  [ -f "$dsc" ] || { echo "no source package file $dsc for $src" >&2; exit 1; }
+  # debian/copyright of the source package: from its debian tarball, else from the installed package
+  deb_tar="$(awk '/^Checksums-Sha256:/ {f=1; next} f && /^ [0-9a-f]+ [0-9]+ / {print $3; next} f {f=0}' "$dsc" | grep -E '\.(debian|diff)\.tar\.|\.tar\.' | grep -v '\.orig' | head -1 || true)"
+  if [ -n "$deb_tar" ] && tar -xOf "$SRCPKG/debian/$deb_tar" debian/copyright > "$dest/copyright" 2>/dev/null && [ -s "$dest/copyright" ]; then :
+  elif [ -s "/usr/share/doc/$pkg/copyright" ]; then cp -L "/usr/share/doc/$pkg/copyright" "$dest/copyright"
+  else echo "no licence text found for $src ($pkg)" >&2; exit 1; fi
+  printf 'debian\t%s\t%s\t%s\n' "$src" "$nover" "debian/$src" >> "$WORK/link-trace.txt"
+done < "$WORK/linked-debian.tsv"
+
+while read -r pkg; do
+  dest="$LIC/gcc-runtime/$pkg"; mkdir -p "$dest"
+  [ -s "/usr/share/doc/$pkg/copyright" ] || { echo "no licence text found for $pkg" >&2; exit 1; }
+  cp -L "/usr/share/doc/$pkg/copyright" "$dest/copyright"
+  printf 'runtime\t%s\t%s\t%s\n' "$pkg" "$pkg" "gcc-runtime/$pkg" >> "$WORK/link-trace.txt"
+done < "$WORK/linked-runtime.txt"
+cat > "$LIC/README.txt" <<'TXT'
+The licence text of every library linked statically into bin/ffmpeg and bin/ffprobe.
+The list of those libraries, taken from the linker map of both binaries, is ../LINK-TRACE.txt:
+  <name>/                             libraries compiled from a pinned commit, and ffmpeg itself (their COPYING / LICENSE files)
+  debian/<source package>/copyright   Debian libraries (the debian/copyright of the source package)
+  gcc-runtime/<package>/copyright     the compiler runtime (libgcc, libstdc++), GPL with the runtime exception
+glibc is linked dynamically (apart from libc_nonshared.a, whose source package is listed above) and is not otherwise part of this tree.
+TXT
+LC_ALL=C sort -u -o "$WORK/link-trace.txt" "$WORK/link-trace.txt"
+cat "$WORK/link-trace.txt"
 echo "::endgroup::"
 
 BIN="$WORK/ffout/bin"
@@ -436,8 +537,10 @@ TOP="ffmpeg-${FFMPEG_DESCRIBE}-${TAR_ARCH}-gpl-8.1-nodaro${EXTRA_VERSION##*nodar
 rm -rf "$WORK/pkg" && mkdir -p "$WORK/pkg/$TOP/bin" "$WORK/pkg/$TOP/source"
 cp "$BIN/ffmpeg" "$BIN/ffprobe" "$WORK/pkg/$TOP/bin/"
 cp COPYING.GPLv3 "$WORK/pkg/$TOP/LICENSE.txt"
-cp "$SRC"/patches/*.patch "$SRC/build.sh" "$WORK/pkg/$TOP/source/"
+cp "$SRC"/patches/*.patch "$SRC/build.sh" "$SRC/check-source-offer.sh" "$WORK/pkg/$TOP/source/"
 cp "$WORK/packages.txt" "$WORK/pkg/$TOP/packages.txt"
+cp -r "$WORK/licenses" "$WORK/pkg/$TOP/LICENSES"
+cp "$WORK/link-trace.txt" "$WORK/pkg/$TOP/LINK-TRACE.txt"
 "$BIN/ffmpeg" -hide_banner -buildconf > "$WORK/pkg/$TOP/buildconf.txt"
 {
   echo "ffmpeg   $FFMPEG_COMMIT ($FFMPEG_DESCRIBE) + source/*.patch"
@@ -454,6 +557,7 @@ cp "$WORK/packages.txt" "$WORK/pkg/$TOP/packages.txt"
   echo "apt      snapshot.debian.org/archive/debian/$APT_SNAPSHOT (+ debian-security) -- every package and version in packages.txt"
   echo "other libraries: those Debian bookworm packages, statically linked ($(dpkg --print-architecture))"
   echo "x265     source edit at build time: one added line (#include <cstdint>) in source/dynamicHDR10/json11/json11.cpp, see source/build.sh"
+  echo "LINK-TRACE.txt lists every library linked into ffmpeg and ffprobe (from the linker map); LICENSES/ holds the licence text of each."
   echo "built by source/build.sh. The complete corresponding source is published beside this tarball in the release:"
   echo "  ffmpeg-${FFMPEG_DESCRIBE}-nodaro${EXTRA_VERSION##*nodaro}-source-${TAR_ARCH}.tar.xz"
   echo "(ffmpeg at the commit, the patches, every library above built from source, and the Debian source packages"
@@ -470,9 +574,12 @@ rm -rf "$WORK/srcout" && mkdir -p "$WORK/srcout/$SRC_TOP"
 cp -r "$SRCPKG"/. "$WORK/srcout/$SRC_TOP/"
 mkdir -p "$WORK/srcout/$SRC_TOP/build"
 cp -r "$SRC"/patches "$WORK/srcout/$SRC_TOP/build/"
-cp "$SRC/build.sh" "$WORK/pkg/$TOP/SOURCE.txt" "$WORK/packages.txt" "$WORK/linked-debian.txt" "$WORK/srcout/$SRC_TOP/build/"
+cp "$SRC/build.sh" "$SRC/check-source-offer.sh" "$WORK/pkg/$TOP/SOURCE.txt" "$WORK/packages.txt" "$WORK/linked-debian.txt" "$WORK/link-trace.txt" "$WORK/srcout/$SRC_TOP/build/"
 tar -C "$WORK/srcout" --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner -cf - "$SRC_TOP" | xz -9 -T1 > "$OUT/$SRC_TOP.tar.xz"
 ( cd "$OUT" && sha256sum "$SRC_TOP.tar.xz" | tee "$SRC_TOP.tar.xz.sha256" )
+# The proof, before anything is published: the trace is not empty, and the source
+# archive and the tarball hold the source and the licence text of every library in it.
+bash "$SRC/check-source-offer.sh" "$OUT/$TOP.tar.xz" "$OUT/$SRC_TOP.tar.xz"
 echo "$TOP" > "$OUT/top.txt"
 "$BIN/ffmpeg" -hide_banner -buildconf > "$OUT/buildconf.txt"
 echo "::endgroup::"

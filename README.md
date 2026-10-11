@@ -6,8 +6,9 @@ source in this repository's release workflow.
 
 It is the same ffmpeg source commit, with the same x264 / x265 / LAME / Opus / FreeType / HarfBuzz / dav1d
 revisions and configure options, as the prebuilt static build `autobuild-2026-06-30-13-34` of
-[BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), so its encoders and `drawtext` produce the
-same output. It differs in two ways, both written down:
+[BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds). The goal is that its encoders and `drawtext`
+produce the same output as that build; what has been measured toward that so far, and what has not yet been
+shown for the released binaries, is under [Verification](#verification). It differs in two ways, both written down:
 
 1. **The patch** (`patches/0001-…patch`): `choose_input()` in `fftools/ffmpeg_filter.c` no longer elects a
    filtergraph input the graph has already closed. Upstream elects it, the filter thread then waits for a
@@ -33,7 +34,11 @@ tar -xf ffmpeg-*-linux64-*.tar.xz
 ```
 
 The tarball layout is `<top>/bin/ffmpeg`, `<top>/bin/ffprobe`, `LICENSE.txt`, `SOURCE.txt` (every pinned
-revision), `packages.txt` (every Debian package and version used), `buildconf.txt`, `source/`.
+revision), `packages.txt` (every Debian package and version used), `buildconf.txt`, `source/`,
+`LINK-TRACE.txt` (every static library linked into `ffmpeg` or `ffprobe`, read from the linker map of both)
+and `LICENSES/` (the licence text of each of those libraries: the `COPYING` / `LICENSE` files of the ones built
+from a pinned commit, the `debian/copyright` of the Debian source package of the others, and the compiler
+runtime's), so a copy of the binary carries its licences with it.
 Only glibc and the loader are dynamically linked; the binaries are PIE with RELRO, `BIND_NOW` and a
 stack protector.
 
@@ -56,6 +61,11 @@ the build runs `make -j"$(nproc)"`, or a different Docker setup) has not yet bee
 not expect its sha256 to equal the release's `SHA256SUMS` until that has been checked. Pass `BASE_IMAGE` exactly
 as above: `SOURCE.txt` records it, and it reads `unrecorded` (a different file, a different tarball) when omitted.
 The source archives (`*-source-*.tar.xz`) are covered by the same two-build comparison.
+
+Before anything is published, the workflow also runs `check-source-offer.sh` on each architecture's tarball and
+source archive and fails (publishing nothing) unless the link trace is not empty, the source archive holds a
+source tarball for every library the trace lists (the pinned-commit tarballs, and for each Debian library its
+`.dsc` and every file the `.dsc` lists), and the binary tarball holds the licence text of every one of them.
 
 ## Cutting a release
 

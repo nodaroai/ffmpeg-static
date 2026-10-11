@@ -98,6 +98,9 @@ jobs:
             install -m 0755 /dist/bin/ffmpeg /dist/bin/ffprobe /usr/local/bin/
             ffmpeg -version | head -1
             ffmpeg -version | head -1 | grep -q -- '-nodaro'
+            test -s /dist/LINK-TRACE.txt
+            test -s /dist/LICENSES/ffmpeg/COPYING.GPLv3
+            test -s /dist/LICENSES/README.txt
             ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x240:rate=25:duration=1 \
               -vf \"drawtext=text=ok:fontsize=24:fontcolor=white:x=10:y=10\" -c:v libx264 -f null -
             ffprobe -version | head -1"
@@ -132,10 +135,39 @@ jobs:
             diff -u "$arch-1.sums" "$arch-2.sums" || { echo "$arch: the two builds differ" >&2; exit 1; }
           done
 
+  source-offer:
+    name: The source offer is complete (${{ matrix.arch }})
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v5
+        with:
+          name: build-${{ matrix.arch }}-1
+          path: art
+      # Nothing is published unless the link trace of the binaries is not empty AND
+      # the source archive holds a source tarball for every library the trace lists
+      # (and the binary tarball its licence text).
+      - name: Link trace non-empty; every linked library has its source and licence text
+        run: |
+          set -euo pipefail
+          ls -l art
+          BIN="$(ls art/ffmpeg-*-gpl-8.1-nodaro*.tar.xz)"
+          SRC="$(ls art/ffmpeg-*-source-*.tar.xz)"
+          test "$(echo "$BIN" | wc -l)" = 1
+          test "$(echo "$SRC" | wc -l)" = 1
+          bash check-source-offer.sh "$BIN" "$SRC"
+
   release:
     name: Publish the release
     if: github.ref_type == 'tag'
-    needs: reproducible
+    needs: [reproducible, source-offer]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

@@ -198,7 +198,7 @@ esac
 test("a release needs two byte-identical builds per architecture and holds the corresponding source", () => {
   assert.match(workflow, /run: \[1, 2\]/, "every architecture is built twice")
   assert.match(workflow, /reproducible:[\s\S]*the two builds differ/)
-  assert.match(workflow, /release:[\s\S]*needs: reproducible/, "the release waits for the comparison")
+  assert.match(workflow, /release:[\s\S]*needs: \[reproducible, source-offer\]/, "the release waits for the comparison and for the source-offer check")
   assert.match(workflow, /contents: write/)
   assert.equal((workflow.match(/contents: write/g) ?? []).length, 1, "write permission on the release job only")
   assert.match(workflow, /gh release create/)
@@ -211,7 +211,7 @@ test("a release needs two byte-identical builds per architecture and holds the c
 })
 
 test("nothing internal is in the public tree", () => {
-  for (const rel of ["build.sh", "compare-stock.sh", "README.md", "DROPPED.md", "LICENSE.md", ".github/workflows/release.yml", ".github/workflows/test.yml"]) {
+  for (const rel of ["build.sh", "compare-stock.sh", "check-source-offer.sh", "README.md", "DROPPED.md", "LICENSE.md", ".github/workflows/release.yml", ".github/workflows/test.yml"]) {
     const text = read(rel)
     assert.doesNotMatch(text, /internal|plan\.nodaro|railway|superpowers|speaker.?view|install-pinned|nodaro-ci|epyc|\.remember|session_|backend\/|packages\//i, rel)
   }

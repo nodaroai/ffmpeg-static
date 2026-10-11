@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - run: bash -n build.sh && bash -n compare-stock.sh
+      - run: bash -n build.sh && bash -n compare-stock.sh && bash -n check-source-offer.sh
       - run: node --test tests/
       - name: The patch applies to the pinned ffmpeg commit
         run: |
