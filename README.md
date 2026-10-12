@@ -7,8 +7,8 @@ source in this repository's release workflow.
 It is the same ffmpeg source commit, with the same x264 / x265 / LAME / Opus / FreeType / HarfBuzz / dav1d
 revisions and configure options, as the prebuilt static build `autobuild-2026-06-30-13-34` of
 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds). The goal is that its encoders and `drawtext`
-produce the same output as that build; what has been measured toward that so far, and what has not yet been
-shown for the released binaries, is under [Verification](#verification). It differs in two ways, both written down:
+produce the same output as that build; what has been measured on the released x86_64 binaries, and what has not
+(arm64), is under [Verification](#verification). It differs in two ways, both written down:
 
 1. **The patch** (`patches/0001-…patch`): `choose_input()` in `fftools/ffmpeg_filter.c` no longer elects a
    filtergraph input the graph has already closed. Upstream elects it, the filter thread then waits for a
@@ -89,23 +89,51 @@ progress for 25 seconds.
 | unpatched (stock static build of the same commit) | 397 | 43 of 397 (10.8%) | 0 |
 | patched | 394 | 0 of 394 | 0 |
 
-Output parity: both builds use the same x264 (core 165, same options string). In 2 of the 3 jobs every finished
+Output parity, earlier measurement (taken with the earlier form of the patch and an earlier build, see the
+limits): both builds use the same x264 (core 165, same options string). In 2 of the 3 jobs every finished
 launch of both builds had one and the same file md5 (and decoded-picture md5); in 15 of 15 follow-up jobs (6
 renders per build each, same sources) the file md5 and every frame CRC matched. One job did not match: its
-unpatched and patched outputs were each stable across about 130 launches but differed from each other; it was
-not reproduced in the 15 follow-up jobs on the same kind of hosts and the cause is not known. The unpatched build
-exited 255 once in each of 3 follow-up jobs (output complete and identical); the patched build never exited
-non-zero.
+unpatched and patched outputs were each stable across about 130 launches but differed from each other; the
+cause is not known. The unpatched build exited 255 once in each of 3 follow-up jobs (output complete and
+identical); the patched build never exited non-zero.
+
+### Re-run on the released x86_64 tarball
+
+The same measurement repeated with this repository's release `n8.1.2-21-gce3c09c101-20260630-nodaro1`
+(x86_64 tarball sha256 `daa6386f9ef4f4fec9e6009bf6f1719abc0656dd0e3c9bf349a5411494dadc32`, the patch as it is
+here) against the stock prebuilt it follows: same graph and setup as above (self-hosted runner, one 96-core AMD server
+CPU model, 2-vCPU quota, one job at a time, round-robin launches on the same synthetic sources, stalled = no progress for 25
+seconds), three jobs:
+
+| job | build | launches | stalled | failed | distinct output md5 |
+|---|---|---|---|---|---|
+| 1 | unpatched | 136 | 10 | 0 | 1 (126 finished) |
+| 1 | patched | 136 | 0 | 0 | the same one (136 finished) |
+| 2 | unpatched | 151 | 7 | 0 | 1 (144 finished) |
+| 2 | patched | 150 | 0 | 0 | the same one (150 finished) |
+| 3 | unpatched | 135 | 12 | 0 | 1 (123 finished) |
+| 3 | patched | 135 | 0 | 0 | the same one (135 finished) |
+| total | unpatched | 422 | 29 (6.9%) | 0 | |
+| total | patched | 421 | 0 | 0 | |
+
+Within each job every finished launch of both builds had one and the same output file md5 (the md5 differs
+between jobs, since each job regenerates its sources); a decoded-picture md5 and a per-frame md5 list were taken
+per distinct output. The earlier job whose outputs differed did not recur: the two builds never differed in
+these jobs. A fourth job landed on a host of another CPU model, was refused by the CPU check and ran nothing.
+The consuming application's output-characterization suite (decoded-output metrics for `drawtext`, the filters
+and the encoders, 58 tests) passes on these released x86_64 binaries with no numeric change to its reference
+values.
 
 Limits, stated plainly:
 
-- These numbers were taken with an earlier form of the fix. That form skipped closed inputs and, when every
-  open input was closed, took the lowest-numbered one. The patch in this repository keeps upstream's own pick
-  (the input with the most failed buffersrc requests) among the inputs that are not closed. The stall
-  and parity measurement has not yet been repeated with this form of the patch.
-- The binaries measured were an earlier build; the current ones differ from them (hardening flags, a pinned
-  Debian snapshot). The measurement has not yet been repeated on them.
-- arm64 was built and smoke-tested, not run on the stall venue (x86_64 only).
+- The earlier numbers (43 of 397, 0 of 394) were taken with an earlier form of the fix and an earlier build.
+  That form skipped closed inputs and, when every open input was closed, took the lowest-numbered one; the
+  patch in this repository keeps upstream's own pick (the input with the most failed buffersrc requests)
+  among the inputs that are not closed. The re-run above is the measurement of the released patch on the released
+  binaries.
+- The output-identity result is a measurement of this graph on this venue, not a proof for every graph. The
+  earlier job whose outputs differed has no known cause.
+- arm64 was built, smoke-tested and checked for byte-identical rebuilds, not run on the stall venue (x86_64 only).
 
 ## Licence
 

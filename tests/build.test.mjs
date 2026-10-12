@@ -247,8 +247,14 @@ test("the measurements the patch header points at are in the README, with their 
   assert.doesNotMatch(verification, /release notes/i, "the README must not point at release notes that carry no numbers")
   assert.match(verification, /43 of 397/)
   assert.match(verification, /0 of 394/)
-  assert.match(verification, /earlier form/i, "numbers were taken on the earlier form of the fix")
-  assert.match(verification, /has not yet been repeated/i)
+  assert.match(verification, /earlier form/i, "the first numbers were taken on the earlier form of the fix")
+  // the re-run on the released x86_64 tarball, with its totals and its limits
+  assert.match(verification, /Re-run on the released x86_64 tarball/)
+  assert.match(verification, /\| total \| unpatched \| 422 \| 29 \(6\.9%\) \| 0 \|/)
+  assert.match(verification, /\| total \| patched \| 421 \| 0 \| 0 \|/)
+  assert.match(verification, /58 tests/)
+  assert.match(verification, /not run on the stall venue/)
+  assert.doesNotMatch(verification, /has not yet been repeated/i, "the re-run has been done")
 })
 
 test("the README claims reproducibility only where it was compared", () => {
